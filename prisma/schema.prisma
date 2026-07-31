@@ -1,0 +1,85 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int        @id @default(autoincrement())
+  name         String
+  email        String     @unique
+  passwordHash String     @map("password_hash")
+  role         String     @default("user")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  watchHistory WatchHistory[]
+  ratings      Rating[]
+  favorites    Favorite[]
+
+  @@map("Users")
+}
+
+model Channel {
+  id          Int        @id @default(autoincrement())
+  title       String
+  category    String
+  tags        String     @default("")
+  thumbnailUrl String     @default("") @map("thumbnail_url")
+  streamUrl   String     @default("") @map("stream_url")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  watchHistory WatchHistory[]
+  ratings      Rating[]
+  favorites    Favorite[]
+
+  @@map("Channels")
+}
+
+model WatchHistory {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @map("user_id")
+  channelId     Int      @map("channel_id")
+  watchedAt     DateTime @default(now()) @map("watched_at")
+  watchDuration Int      @default(0) @map("watch_duration")
+  user          User     @relation(fields: [userId], references: [id])
+  channel       Channel  @relation(fields: [channelId], references: [id])
+
+  @@map("Watch_History")
+}
+
+model Server {
+  id          Int    @id @default(autoincrement())
+  serverName  String @map("server_name")
+  ipAddress   String @map("ip_address")
+  region      String @default("")
+  currentLoad Float  @default(0) @map("current_load")
+  status      String @default("active")
+
+  @@map("Servers")
+}
+
+model Rating {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  channelId Int      @map("channel_id")
+  score     Int
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id])
+
+  @@unique([userId, channelId])
+  @@map("Ratings")
+}
+
+model Favorite {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  channelId Int      @map("channel_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id])
+
+  @@unique([userId, channelId])
+  @@map("Favorites")
+}
