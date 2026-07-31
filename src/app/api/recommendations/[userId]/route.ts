@@ -3,7 +3,7 @@ import { db } from '@/lib/db';
 import { verifyToken, extractTokenFromHeader } from '@/lib/auth';
 import { getRecommendations } from '@/lib/ai-engine';
 
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:3001';
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || '';
 
 export async function GET(
   req: NextRequest,
@@ -29,69 +29,53 @@ export async function GET(
     // Fetch all channels
     const allChannels = await db.channel.findMany();
 
-    // === INTERNAL API CALL to Python AI Service ===
-    // السيرفر الرئيسي (Node.js) يستدعي خدمة الذكاء الاصطناعي (Python)
-    let recommendedIds: number[] = [];
-
     // Fetch user ratings for enhanced recommendations
     const userRatings = await db.rating.findMany({
       where: { userId: uid },
       select: { channelId: true, score: true },
     });
 
-    // === INTERNAL API CALL to Python AI Service ===
-    try {
-      const aiRes = await fetch(`${AI_SERVICE_URL}/ai/recommend`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: uid,
-          watch_history: history.map(h => ({
-            ...h,
-            channel: { ...h.channel, createdAt: String(h.channel.createdAt) },
-            watchedAt: String(h.watchedAt),
-          })),
-          all_channels: allChannels.map(ch => ({
-            ...ch,
-            createdAt: String(ch.createdAt),
-          })),
-          ratings: userRatings,
-          top_n: 10,
-        }),
-      });
-      if (aiRes.ok) {
-        const aiData = await aiRes.json();
-        recommendedIds = aiData.recommendations || [];
-        console.log(`[AI Service] Recommendations for user ${uid}: ${recommendedIds.length} items, algo: ${aiData.algorithm}`);
-      } else {
-        console.warn('[AI Service] Failed, falling back to local engine');
-        recommendedIds = getRecommendations(
-          history.map(h => ({
-            ...h,
-            channel: { ...h.channel, createdAt: String(h.channel.createdAt) },
-            watchedAt: String(h.watchedAt),
-          })) as any,
-          allChannels.map(ch => ({ ...ch, createdAt: String(ch.createdAt) })) as any,
-          userRatings,
-        );
+    const historyParsed = history.map(h => ({
+      ...h,
+      channel: { ...h.channel, createdAt: String(h.channel.createdAt) },
+      watchedAt: String(h.watchedAt),
+    }));
+    const channelsParsed = allChannels.map(ch => ({ ...ch, createdAt: String(ch.createdAt) }));
+
+    let recommendedIds: number[] = [];
+    let algorithm = 'TF-IDF + Cosine Similarity (Built-in AI Engine)';
+
+    // === محرك AI الأساسي (TypeScript - يعمل دائماً) ===
+    recommendedIds = getRecommendations(historyParsed as any, channelsParsed as any, userRatings);
+
+    // === اختياري: محسن بـ Python Microservice إذا كان متاح ===
+    if (AI_SERVICE_URL) {
+      try {
+        const aiRes = await fetch(`${AI_SERVICE_URL}/ai/recommend`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: uid, watch_history: historyParsed,
+            all_channels: channelsParsed, ratings: userRatings, top_n: 10,
+          }),
+          signal: AbortSignal.timeout(3000), // 3 ثواني فقط
+        });
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          if (aiData.recommendations?.length > 0) {
+            recommendedIds = aiData.recommendations;
+            algorithm = `TF-IDF + Cosine Similarity (Python AI Microservice: ${aiData.algorithm})`;
+          }
+        }
+      } catch {
+        // Python service not available, built-in engine already has results
       }
-    } catch (aiError) {
-      console.warn('[AI Service] Unreachable, falling back to local engine:', aiError);
-      recommendedIds = getRecommendations(
-        history.map(h => ({
-          ...h,
-          channel: { ...h.channel, createdAt: String(h.channel.createdAt) },
-          watchedAt: String(h.watchedAt),
-        })) as any,
-        allChannels.map(ch => ({ ...ch, createdAt: String(ch.createdAt) })) as any,
-        userRatings,
-      );
     }
 
+    console.log(`[AI] User ${uid}: ${recommendedIds.length} recommendations via: ${algorithm}`);
+
     // Return full channel objects for recommended IDs
-    const recommendedChannels = allChannels.filter(ch =>
-      recommendedIds.includes(ch.id)
-    );
+    const recommendedChannels = allChannels.filter(ch => recommendedIds.includes(ch.id));
 
     return NextResponse.json(recommendedChannels);
   } catch (error) {
